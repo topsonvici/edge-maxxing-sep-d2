@@ -1,8 +1,9 @@
 import torch
 from PIL.Image import Image
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, AutoencoderKL
 from pipelines.models import TextToImageRequest
 from torch import Generator
+from opttf import opttf_pipeline
 
 
 def load_pipeline() -> StableDiffusionXLPipeline:
@@ -17,6 +18,7 @@ def load_pipeline() -> StableDiffusionXLPipeline:
         local_files_only=True,
         vae=vae,
     ).to("cuda")
+    pipeline = opttf_pipeline(pipeline)
 
     pipeline(prompt="")
 
@@ -24,6 +26,7 @@ def load_pipeline() -> StableDiffusionXLPipeline:
 
 
 def infer(request: TextToImageRequest, pipeline: StableDiffusionXLPipeline) -> Image:
+    pipeline = opttf_pipeline(pipeline)
     generator = Generator(pipeline.device).manual_seed(request.seed) if request.seed else None
 
     return pipeline(

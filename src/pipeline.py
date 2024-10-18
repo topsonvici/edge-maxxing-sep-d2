@@ -65,7 +65,10 @@ def load_pipeline() -> StableDiffusionXLPipeline:
     return pipeline
 
 def infer(request: TextToImageRequest, pipeline: StableDiffusionXLPipeline) -> Image:
-    generator = Generator(pipeline.device).manual_seed(request.seed) if request.seed else None
+    if request.seed is None:
+        generator = None
+    else:
+        generator = Generator(pipeline.device).manual_seed(request.seed)
 
     image = pipeline.tgate(
         request.prompt,

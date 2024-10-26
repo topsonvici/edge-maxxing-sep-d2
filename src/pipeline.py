@@ -1,9 +1,24 @@
 import torch
 from PIL.Image import Image
-from diffusers import UniPCMultistepScheduler, AutoencoderTiny
-from sfast.compilers.diffusion_pipeline_compiler import (compile, CompilationConfig)
 from pipelines.models import TextToImageRequest
 from torch import Generator
+from diffusers import AutoencoderTiny
+
+
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -45,8 +60,6 @@ from diffusers.utils import (
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, StableDiffusionMixin
 from diffusers.pipelines.stable_diffusion_xl.pipeline_output import StableDiffusionXLPipelineOutput
-torch._inductor.config.force_fuse_int_mm_with_mul = True
-torch._inductor.config.fx_graph_cache = True
 
 
 if is_invisible_watermark_available():
@@ -1024,6 +1037,24 @@ class StableDiffusionXLPipeline(
         original_size = original_size or (height, width)
         target_size = target_size or (height, width)
 
+        # 1. Check inputs. Raise error if not correct
+        self.check_inputs(
+            prompt,
+            prompt_2,
+            height,
+            width,
+            callback_steps,
+            negative_prompt,
+            negative_prompt_2,
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds,
+            negative_pooled_prompt_embeds,
+            ip_adapter_image,
+            ip_adapter_image_embeds,
+            callback_on_step_end_tensor_inputs,
+        )
+
         self._guidance_scale = guidance_scale
         self._guidance_rescale = guidance_rescale
         self._clip_skip = clip_skip
@@ -1281,55 +1312,49 @@ class StableDiffusionXLPipeline(
 
         return StableDiffusionXLPipelineOutput(images=image)
 
+from onediffx import compile_pipe
 
-def load_pipeline() -> StableDiffusionXLPipeline:
+def load_pipeline(pipeline=None) -> StableDiffusionXLPipeline:
     # vae = AutoencoderTiny.from_pretrained(
     # 'madebyollin/taesdxl',
     # use_safetensors=True,
     # torch_dtype=torch.float16,
     # ).to('cuda')
-    pipeline = StableDiffusionXLPipeline.from_pretrained(
-        "./models/newdream-sdxl-20",
-        torch_dtype=torch.float16,
-        use_safetensors=True,
-        local_files_only=True,
-        # vae=vae
-    )
-    #pipeline.vae = AutoencoderTiny.from_pretrained("madebyollin/taesdxl", torch_dtype=torch.float16)
-    pipeline.scheduler = UniPCMultistepScheduler.from_config('./src/config',)
-    pipeline.to("cuda")
-
-    compilation_config = CompilationConfig.Default()
-    # xformers and Triton are suggested for achieving best performance.
-    try:
-        import xformers
-        compilation_config.enable_xformers = True
-    except ImportError:
-        print('xformers not installed, skip')
-    try:
-        import triton
-        compilation_config.enable_triton = True
-    except ImportError:
-        print('Triton not installed, skip')
-    compilation_config.enable_cuda_graph = True
-    pipeline = compile(pipeline, compilation_config)
-    for _ in range(4):
-        pipeline(prompt="an astronaut on a horse", num_inference_steps=14)
+    if not pipeline:
+        pipeline = StableDiffusionXLPipeline.from_pretrained(
+            "./models/newdream-sdxl-20",
+            torch_dtype=torch.float16,
+            local_files_only=True,
+            # vae=vae
+        ).to("cuda")
+    pipeline = compile_pipe(pipeline)
+    for _ in range(3):
+        pipeline(prompt="photo of a cat", num_inference_steps=20)
 
     return pipeline
 
+def callback_dynamic_cfg(pipe, step_index, timestep, callback_kwargs):
+  if step_index == int(pipe.num_timesteps * 0.5):
+    callback_kwargs['prompt_embeds'] = callback_kwargs['prompt_embeds'].chunk(2)[-1]
+    callback_kwargs['add_text_embeds'] = callback_kwargs['add_text_embeds'].chunk(2)[-1]
+    callback_kwargs['add_time_ids'] = callback_kwargs['add_time_ids'].chunk(2)[-1]
+    pipe._guidance_scale = 0.0
+
+  return callback_kwargs
 
 def infer(request: TextToImageRequest, pipeline: StableDiffusionXLPipeline) -> Image:
     if request.seed is None:
         generator = None
     else:
         generator = Generator(pipeline.device).manual_seed(request.seed)
-        
+
     return pipeline(
         prompt=request.prompt,
         negative_prompt=request.negative_prompt,
         width=request.width,
         height=request.height,
         generator=generator,
-        num_inference_steps=7,
+        num_inference_steps=20,
+        callback_on_step_end=callback_dynamic_cfg,
+        callback_on_step_end_tensor_inputs=['prompt_embeds', 'add_text_embeds', 'add_time_ids'],
     ).images[0]

@@ -1334,7 +1334,7 @@ def load_pipeline(pipeline=None) -> StableDiffusionXLPipeline:
     return pipeline
 
 def callback_dynamic_cfg(pipe, step_index, timestep, callback_kwargs):
-  if step_index == int(pipe.num_timesteps * 0.5):
+  if step_index == int(pipe.num_timesteps * 0.4):
     callback_kwargs['prompt_embeds'] = callback_kwargs['prompt_embeds'].chunk(2)[-1]
     callback_kwargs['add_text_embeds'] = callback_kwargs['add_text_embeds'].chunk(2)[-1]
     callback_kwargs['add_time_ids'] = callback_kwargs['add_time_ids'].chunk(2)[-1]
